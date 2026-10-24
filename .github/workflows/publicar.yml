@@ -1,0 +1,74 @@
+name: Publicar jogo Vida Aberta
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'Vida-Aberta-PWA-0.12.0.zip'
+      - '.github/workflows/publicar.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages-vida-aberta
+  cancel-in-progress: true
+
+jobs:
+  publicar:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+
+    steps:
+      - name: Baixar projeto
+        uses: actions/checkout@v4
+
+      - name: Extrair jogo e preparar funcionamento offline
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p site
+          unzip -q Vida-Aberta-PWA-0.12.0.zip -d /tmp/vida-aberta
+          cp -a /tmp/vida-aberta/Vida-Aberta-PWA-0.12.0/. site/
+          python3 - <<'PY'
+          from pathlib import Path
+          import json, re
+          d = Path('site')
+          required = ['index.html','style.css','pwa.js','sw.js','manifest.webmanifest','icon-192.png','icon-512.png','apple-touch-icon.png']
+          assert all((d/name).is_file() for name in required), 'Arquivos PWA faltando'
+          html = (d/'index.html').read_text(encoding='utf-8')
+          scripts = re.findall(r'<script[^>]+src="([^"]+)"',html)
+          assert all((d/path).is_file() for path in scripts), 'Script do jogo faltando'
+          sw = (d/'sw.js').read_text(encoding='utf-8')
+          sw = sw.replace('"./index.html",', '"./index.html", "./", "./pwa.js",')
+          sw = sw.replace("vida-aberta-pwa-v0.12.0-1", "vida-aberta-pwa-v0.12.0-2")
+          (d/'sw.js').write_text(sw, encoding='utf-8')
+          manifest = json.loads((d/'manifest.webmanifest').read_text(encoding='utf-8'))
+          assert manifest['display'] == 'standalone'
+          print(f'{len(scripts)} scripts carregados; PWA preparado para offline')
+          PY
+          rm -f site/LEIA-ME-PWA.txt
+          touch site/.nojekyll
+
+      - name: Verificar sintaxe JavaScript
+        run: |
+          set -euo pipefail
+          for arquivo in site/*.js; do node --check "$arquivo"; done
+
+      - name: Configurar GitHub Pages
+        uses: actions/configure-pages@v5
+
+      - name: Enviar arquivos
+        uses: actions/upload-pages-artifact@v4
+        with:
+          path: site
+
+      - name: Publicar site
+        id: deployment
+        uses: actions/deploy-pages@v4
